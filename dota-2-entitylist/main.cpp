@@ -3,6 +3,11 @@
 #include <iostream>
 #include <vector>
 
+#define INVALID_EHANDLE_INDEX 0xFFFFFFFF
+#define ENT_ENTRY_MASK 0x7FFF
+#define NUM_SERIAL_NUM_SHIFT_BITS 15
+#define ENT_MAX_NETWORKED_ENTRY 16384
+
 
 std::uint8_t* PatternScan(const char* module_name, const char* signature) noexcept {
 	const auto module_handle = GetModuleHandleA(module_name);
@@ -58,12 +63,6 @@ std::uint8_t* PatternScan(const char* module_name, const char* signature) noexce
 	throw std::runtime_error(std::string("Wrong signature: ") + signature);
 }
 
-
-#define INVALID_EHANDLE_INDEX 0xFFFFFFFF
-#define ENT_ENTRY_MASK 0x7FFF
-#define NUM_SERIAL_NUM_SHIFT_BITS 15
-#define ENT_MAX_NETWORKED_ENTRY 16384
-
 class CBaseHandle
 {
 public:
@@ -100,40 +99,42 @@ private:
 
 class CBaseEntity {
 public:
-	/// Insert values from Entity
-};
-
-class Pawn
-{
-public:
-	/// Insert values for Pawn
-};
-
-class Controller {
-public:
-
-	CBaseHandle GetHandle()
+	CBaseHandle GetHeroHandle()
 	{
-		return *reinterpret_cast<CBaseHandle*>(this + 0x5F4);;
+		return *reinterpret_cast<CBaseHandle*>(this + 0x7E4);;
 	}
+};
+
+class Hero {
+public:
+	int GetHealth()
+	{
+		using fnGetHealth = int(__thiscall*)(void*);
+		static fnGetHealth GetHealthFn = (fnGetHealth)PatternScan("client.dll", "8B 81 ? ? ? ? C3 CC CC CC CC CC CC CC CC CC 48 83 EC ? 48 8B 01");
+		return GetHealthFn(this);
+	}
+
+	/* @ Backup Index
+	int GetHealthBackup() {
+		using fn = int(__thiscall*)(Hero*);
+		return (*(fn * *)this)[166](this);
+	}
+	*/
 };
 
 
 class IGameEntityList {
 public:
-	template <typename T = CBaseEntity>
-	T* GetEntity(int Index)
+	CBaseEntity* GetClientEntity(int index)
 	{
-		return reinterpret_cast<T*>(this->pGetBaseEntity(Index));
+		return (CBaseEntity*)this->pGetBaseEntity(index);
 	}
-
-	template <typename T = CBaseEntity>
-	T* GetEntity(CBaseHandle hHandle)
+	void* GetClientEntityFromHandle(CBaseHandle hHandle)
 	{
 		if (!hHandle.IsValid())
 			return nullptr;
 
-		return reinterpret_cast<T*>(this->pGetBaseEntity(hHandle.GetEntryIndex()));
+		return this->pGetBaseEntity(hHandle.GetEntryIndex());
 	}
 
 private:
@@ -157,8 +158,9 @@ std::uint8_t* ResolveRip(std::uint8_t* address, std::uint32_t rva_offset, std::u
 	return reinterpret_cast<std::uint8_t*>(rva + rip);
 }
 
+
 DWORD WINAPI EntryPoint(void* param) {
-	
+
 	AllocConsole();
 	FILE* fDummy;
 	freopen_s(&fDummy, "CONOUT$", "w", stdout);
@@ -173,30 +175,33 @@ DWORD WINAPI EntryPoint(void* param) {
 
 	while (!GetAsyncKeyState(VK_DELETE))
 	{
-		if (GetAsyncKeyState(VK_INSERT) & 1) {
-			for (int i = 0; i <= 64; i++)
+		if (GetAsyncKeyState(VK_INSERT) & 1)
+		{
+			std::cout << "Dumping entities\n";
+			for (int i = 1; i <= 64; i++) // Skipping world
 			{
-				CBaseEntity* entity = pEntityList->GetEntity(i);
-				if (!entity)
+				CBaseEntity* pEntity = pEntityList->GetClientEntity(i);
+				if (!pEntity)
 					continue;
-				Controller* controller = (Controller*)entity;
-				if (!controller)
+				CBaseHandle hEntity = pEntity->GetHeroHandle();
+				if (!hEntity.IsValid())
 					continue;
-				Pawn* pawn =  (Pawn*)pEntityList->GetEntity(controller->GetHandle());
-				if (!pawn)
+				Hero* pHero = (Hero*)pEntityList->GetClientEntityFromHandle(hEntity);
+				if (!pHero)
 					continue;
 
-				std::cout<<"["<<i<<"]"<<" Pawn -> "<<pawn<<" Controller -> "<<controller<<" Entity -> "<<entity<<"\n";
+				int Health = pHero->GetHealth();
+				std::cout << "Entity: " << i << " Health: " << Health << "\n";
 
 			}
 		}
 	}
-		Sleep(150);
+	Sleep(150);
 
 
-		if(fDummy)
+	if (fDummy)
 		fclose(fDummy);
-		FreeConsole();
+	FreeConsole();
 
 
 	FreeLibraryAndExitThread(reinterpret_cast<HMODULE>(param), 0);
@@ -213,4 +218,3 @@ BOOL WINAPI DllMain(HMODULE hModule, DWORD dwReason, LPVOID lpReserved) {
 	}
 	return TRUE;
 }
-
